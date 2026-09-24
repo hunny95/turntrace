@@ -5,7 +5,7 @@ This file is working material for the pull-request description. Keep it factual 
 ## Summary
 TurnTrace adds a realtime voice-agent session inspection workflow using Pipecat, with stored recordings/transcripts, user-to-bot latency visualization, deterministic silent-output failure injection, and independent post-call freeze detection.
 
-**Current state:** Gate A (realtime voice path), Gate B (session recording + transcript persistence), Gate C (per-turn user-to-bot latency) and Gate D (deterministic bot-audio freeze simulation) are implemented and verified. Freeze detection and the review UI are pending.
+**Current state:** Gate A (realtime voice path), Gate B (session recording + transcript persistence), Gate C (per-turn user-to-bot latency), Gate D (deterministic bot-audio freeze simulation) and Gate E (independent post-call freeze detection) are implemented and verified. The review UI is pending.
 
 ## Implementation approach
 ### Gate A — realtime voice path (done)
@@ -101,8 +101,40 @@ Provider credentials are read only by the backend. CORS is restricted to the con
 - **Per session:** a new gate is built for each call, so every call starts unfrozen.
 - **Independence:** nothing about the simulator (threshold, flag, activation time, marker text or sidecar file) is written to `session.json` or any other artifact. A single backend log line marks activation for humans only.
 
-## Freeze detection and independence
-_Pending (Gate E)._ The detector must work from the recording, transcript, turn ids and ordinary timing only.
+## Freeze detection and independence (Gate E, done)
+**Gate D creates the condition. Gate E analyzes only ordinary persisted session evidence.** The detector (`server/freeze_detector.py`) does not know the freeze threshold, the activation time, Gate D state or backend logs. It imports neither `freeze_gate` nor `config`, which an AST test enforces. A QA isolation run with `freeze_gate.py` unavailable produced the identical decision.
+
+- **Inputs:**
+  - `recording.wav`
+  - from `session.json`: `durationMs`, `recording.{sampleRate, channels, channelLayout}`, and transcript entries (`role`, `text`, `timestampMs`, and `turnId` where present)
+- **Older sessions:** sessions from before `turnId` existed pair each assistant entry with the most recent preceding user entry. Turns are numbered 1-based by user entry.
+- **Response windows:** for each user-associated assistant response, the window runs from that turn's first user transcript timestamp to the next later-turn user timestamp, or to `durationMs`. Assistant timestamps are written around the end of the response's audio, so the window deliberately starts at the user turn.
+- **Audio evidence (signal energy, not speech recognition):**
+  - The bot channel is resolved from `recording.channelLayout`, and WAV metadata is validated, with an explicit error on any mismatch.
+  - RMS is computed in 20 ms frames.
+  - Threshold: `max(150, min(p20 noise floor, 250) × 4)`, never more than 1000 RMS.
+  - A response is audible if it has at least 200 ms of frames above the threshold.
+  - Exact digital zero is not required. There is no ML, LLM, cloud inference or provider API.
+  - This is a deterministic heuristic for the current recorder and pipeline, verified on the tested amplitude and noise cases. It is not a universally optimal speech detector.
+- **Freeze (`bot_audio_freeze`) is detected when all of these hold:**
+  - bot audio demonstrably worked on an earlier user-associated response
+  - a later response has assistant text but no meaningful bot audio
+  - every later response is also silent, so bot audio never recovers
+  - the session shows activity (a later user or assistant transcript entry) after that first silent response
+- **Not a freeze:**
+  - ordinary trailing silence after a completed conversation
+  - a provider failure with no assistant transcript (that turn can never start a freeze region)
+  - one silent response followed by audible recovery
+  - a final silent response with no continuation evidence (intentionally declined, to reduce false positives)
+  - a session whose bot audio never worked
+- **Region:**
+  - `startTurnId` is the first silent response that satisfies the rules.
+  - `startMs` is that assistant entry's persisted `timestampMs`. It is an evidence-backed observed point, not the simulator's hidden activation time.
+  - `endMs` is `durationMs`.
+- **Artifact:**
+  - `data/sessions/<uuid>/analysis.json` is detector-derived, local and git-ignored, and kept separate from raw `session.json`.
+  - It is written atomically after finalization, off the event loop, and is deterministic, so it can be rerun (`uv run python -m freeze_detector <uuid>`).
+  - A detector failure writes `status: "error"` with no `freeze` block, so it cannot be confused with a valid negative.
 
 ## Latency
 User-to-bot latency is measured from actual user speech end to first emitted bot audio. See Gate C above.
@@ -151,6 +183,9 @@ Gate B:
 - **Recorder after the output transport, not a TTS tap:** the recording must show what the user heard, so a later injected output failure is visible as silence. The assistant transcript comes from a separate path (the text frames the assistant aggregator receives), so the two sources of truth can diverge on purpose.
 - **Freeze gate before the output transport, dropping frames:** muting after the recorder would leave the recording and latency showing audio the user never heard. Replacing audio with silent frames would still make the transport report that the bot started speaking and create a false latency. Dropping frames upstream of the output keeps the recording, latency and browser consistent.
 - **Counting at first audio, not at response start:** Gemini's service announces a response before its request succeeds, so counting at the start would let a provider error consume the threshold.
+- **Evidence-window detection instead of scanning for silence:** only windows where an assistant transcript proves a response existed are examined, so pauses and trailing silence can never count as a freeze. Requiring an earlier audible response, persistence and continuation trades some recall (a final silent response is not reported) for no false positives on the known negatives.
+- **Separate `analysis.json` over mutating `session.json`:** raw evidence stays untouched, and derived output can be regenerated or discarded.
+- **Signal energy over a speech model:** deterministic, dependency-free and explainable, and sufficient for a TTS bot channel.
 - **Stereo over mono mix:** keeping user and bot on separate channels allows each side's audio energy to be analyzed later without source separation.
 - **Pipecat transcript events over log parsing or re-transcription:** these events carry the same finalized text that enters the LLM context, and they cost no extra provider calls.
 - **Write after pipeline cleanup:** the recorder hands over its data from event-handler tasks. Writing the files only after the runner returns ensures those tasks are complete, so nothing is truncated and no partial JSON is left behind.
@@ -174,6 +209,7 @@ Gate B:
 - A failed connect attempt displays the browser/client error message verbatim (not provider text).
 - Freeze counting: if the user starts speaking while the previous response's audio is still finishing, the association between the next response and its user turn (and therefore the freeze count) can be ambiguous. Once frozen, no later bot audio can leak regardless. The scripted test avoids overlap by waiting between turns.
 - Gemini latency varies widely; free-tier quota can produce 429s during long sessions.
+- Freeze detection: the RMS threshold is tuned to this pipeline. The bot channel is TTS output plus digital idle silence, and the threshold is at most 1000 RMS. A quieter voice or gain change could require re-tuning. Response windows rely on transcript timestamps, so heavy barge-in overlap could attribute audio to a neighbouring window. A final silent response followed immediately by hang-up is intentionally not reported.
 
 Gate C:
 - **Automated:** backend pytest 48/48. The 16 latency tests use a deterministic clock:
@@ -217,6 +253,22 @@ Gate D:
   - Assistant text was still persisted for turns 3, 4 and 6, and user audio kept being recorded.
   - The last question was split by turn detection into two user turns (5 and 6). That is ordinary segmentation, not a freeze defect; turn 6 still produced assistant text with no audio.
   - `session.json` keys: `durationMs, id, latencies, recording, startedAt, transcript`; the session directory holds only `recording.wav` and `session.json`.
+
+Gate E:
+- **Automated:** backend pytest 97/97, including 34 detector tests with synthetic WAVs and no providers:
+  - normal calls, trailing silence, provider failure then recovery, transient silence then recovery
+  - a final silent response with no continuation, and a bot that never worked
+  - a positive case with its region
+  - background noise, several speech amplitudes, and speech-dominant recordings
+  - swapped channel layout and six error paths
+  - atomic and idempotent writes that leave raw files unchanged
+  - older sessions without `turnId`
+  - import-boundary and no-provider-module checks
+- **Independent QA:** found a defect. The p20 noise floor over the whole bot channel rose to speech level when the bot spoke in more than about 80% of frames, so real speech (including the earlier audible turn) was classified as silent, a false negative. The repair caps the noise estimate at 250 RMS so the threshold cannot reach normal bot-speech amplitude, and a regression test was added. A scoped QA re-verification then passed: 95% bot-speech occupancy, hiss, silence, low noise, loud and low-amplitude speech, isolation without `freeze_gate.py`, byte-identical reruns, and frontend checks.
+- **Real sessions (human + QA, no provider calls):**
+  - Gate D session `3d804728…`: detected. `startTurnId` 3, `startMs` 38397, `endMs` 174418. Audible before: [1, 2]; silent: [3, 4, 6]; continuation: [4, 5, 6].
+  - Gate C normal session `085a9d47…`: not detected.
+  - Gate B session with a 503 and recovery `44fafc59…`: not detected. The failed user turn had no assistant text, so it cannot start a freeze region.
 
 ## Future improvements
 _To be updated after final review._

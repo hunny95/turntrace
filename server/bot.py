@@ -7,10 +7,13 @@ Gate B adds per-session recording + transcript persistence (server/session.py).
 Gate C adds per-turn user-to-bot latency capture (server/turn_tracker.py).
 Gate D adds deterministic, permanent bot-audio freeze injection
 (server/freeze_gate.py), placed after `tts` and before `transport.output()`.
+Gate E adds an independent, deterministic post-call freeze detector
+(server/freeze_detector.py), run once per session after finalize() succeeds.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 
@@ -55,6 +58,7 @@ from config import (
     GEMINI_RETRY_MAX_DELAY,
 )
 from context_cleanup import FailedLLMTurnContextCleanup
+from freeze_detector import run_detection_safely
 from freeze_gate import FreezeGate
 from session import Session
 from turn_tracker import TurnTracker
@@ -335,3 +339,9 @@ async def run_bot(webrtc_connection) -> None:
         # on_assistant_turn_stopped handler tasks are guaranteed to have
         # completed by this point. Runs on errors too, via try/finally.
         await session.finalize()
+        # Gate E: run the independent post-call freeze detector only after
+        # finalize() has completed successfully (if it raised, this line is
+        # never reached, and no analysis runs over a partially-written
+        # session). Off the event loop; the hook itself never raises -- see
+        # freeze_detector.run_detection_safely.
+        await asyncio.to_thread(run_detection_safely, session.dir)

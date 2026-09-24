@@ -118,6 +118,15 @@ Open `http://localhost:3000`, click **Connect**, and allow microphone access.
 The frontend talks to the backend at `http://localhost:7860` by default
 (override with `NEXT_PUBLIC_TURNTRACE_API_URL` in `web/.env.local`).
 
+After a call, the backend automatically runs the post-call freeze detector
+and writes `data/sessions/<uuid>/analysis.json`. To re-run it by hand for an
+existing session:
+
+```bash
+cd server
+uv run python -m freeze_detector <session-uuid>   # add --no-write to skip saving
+```
+
 ## Status
 
 Work in progress. See `docs/STATUS.md` for the current verified implementation gate.

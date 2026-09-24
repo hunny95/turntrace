@@ -4,18 +4,74 @@
 Expected implementation branch: `feat/voice-session-inspector`
 
 ## Current gate
-Gates A–D complete. Next: Gate E — independent post-call freeze detection.
+Gates A–E complete. Next: Gate F — Next.js session review UI.
 
 ## Gates
 - [x] A — realtime voice path works for several turns
 - [x] B — completed session creates transcript + playable recording
 - [x] C — per-turn user-to-bot latency captured
 - [x] D — deterministic permanent bot-audio freeze injection works
-- [ ] E — independent post-call freeze detection works; trailing silence is not a freeze
+- [x] E — independent post-call freeze detection works; trailing silence is not a freeze
 - [ ] F — Next.js review UI shows playback, transcript, latency, freeze region
 - [ ] G — final tests/build/security/PR notes/demo instructions complete
 
-## Last verified result — Gate D: PASS
+## Last verified result — Gate E: PASS
+
+### Simulation vs detection
+- **Simulation (Gate D):** creates the condition, meaning bot output audio is dropped from a certain point onward.
+- **Detection (this gate):** `server/freeze_detector.py` analyzes only ordinary persisted evidence after the call ends. It does not import `freeze_gate` or `config`, does not read `FREEZE_AFTER_ASSISTANT_TURNS`, logs or simulator state, and no simulator marker exists in any artifact.
+
+### Detection definition (observational label `bot_audio_freeze`)
+A freeze is reported only when all of the following hold:
+- **Earlier audio:** at least one earlier user-associated assistant response has meaningful bot audio. The greeting doesn't count.
+- **Silent response:** a later assistant response has transcript text but no meaningful bot audio in its response window.
+- **Persistence:** every later assistant response is also silent, so bot audio never recovers.
+- **Continuation:** some transcript entry (user or assistant) comes strictly after that first silent response.
+
+Each response window runs from that turn's first user entry to the next later-turn user entry, or to `durationMs`. A user turn with no assistant entry, such as a provider failure, can never start a freeze region.
+
+### Audio analysis
+- **Channel:** the bot channel is taken from `recording.channelLayout`. Channel count, sample rate and sample width are validated against the WAV, and a mismatch is an explicit error.
+- **Framing:** bot RMS is computed in 20 ms frames.
+- **Threshold:** `max(150, min(p20 noise floor, 250) × 4)`, so it can never exceed 1000 RMS.
+- **Audible:** a response is audible if at least 200 ms of frames are above the threshold.
+- Exact zeros are not required, and no ML, LLM or network calls are used.
+
+### Output
+- **File:** `data/sessions/<uuid>/analysis.json`. It is written atomically after `session.finalize()` succeeds, the call runs off the event loop, and exceptions are logged and swallowed. Raw artifacts are never modified.
+- **Status:** `status: "ok"` carries a `freeze` block. On failure it is `status: "error"` with a short code and no `freeze` key.
+- **Region:** `startTurnId` is the first silent response. `startMs` is that assistant entry's `timestampMs`, an evidence-backed observed point and not the simulator's activation time. `endMs` is `durationMs`.
+- **CLI:** `cd server && uv run python -m freeze_detector <uuid> [--no-write]`, which accepts a UUID only.
+- **Older sessions:** pre-Gate-C sessions have no `turnId`. Each assistant entry is paired with the most recent preceding user entry, and turns are numbered 1-based by user entry.
+
+### QA defect and repair (one cycle)
+- **Defect:** first QA found that the p20 noise floor over the whole bot channel rises to speech level when the bot speaks in more than about 80% of frames. Real bot speech was then classified as silent, a false negative.
+- **Repair:** the noise floor is now capped at 250 RMS, and a regression test was added.
+- **Re-verification:** a scoped independent QA re-check passed. It covered 95% bot-speech occupancy, constant hiss, digital silence, small noise, loud speech and low-amplitude (700) speech.
+
+### Real-session validation (human + QA, zero provider calls)
+- `3d804728…` (Gate D session): `detected: true`, `startTurnId: 3`, `startMs: 38397`, `endMs: 174418`. Audible before: [1, 2]; silent: [3, 4, 6]; continuation: [4, 5, 6].
+- `085a9d47…` (Gate C normal session): `detected: false` (`no_silent_assistant_response_after_audible`).
+- `44fafc59…` (Gate B session with a 503 and recovery, older format): `detected: false`. The failed user turn has no assistant entry and so cannot start a freeze region.
+
+### Automated / QA
+- **Backend:** pytest 97/97, including 34 Gate E tests covering:
+  - normal calls, trailing silence, provider failure, transient silence followed by recovery
+  - a final silent response with no continuation, and a bot that never worked
+  - a positive case and its region, noise and amplitude cases, dominant bot speech
+  - swapped channel layout and six error paths
+  - atomic and idempotent writes that leave raw files untouched
+  - older sessions without `turnId`
+  - an import-boundary AST test, and a subprocess check that no provider modules are loaded
+- **Frontend:** tests 5/5; typecheck, lint and build are clean.
+- **QA:** an independent QA mutation check showed the boundary test catches an injected `import config`. An isolation run with `freeze_gate.py`, `config.py` and `session.py` unavailable gave the identical decision.
+
+### Known limitations
+- **Threshold tuning:** the threshold is a deterministic heuristic tuned to this pipeline, whose bot channel is TTS output plus digital idle silence. It is not a universal speech detector. A future voice or gain change that makes genuine speech sustain an RMS below about 1000 could require re-tuning.
+- **Final silent response:** one that isn't followed by any later activity is intentionally not classified, to avoid false positives.
+- **Window boundaries:** windows depend on transcript timestamps. Heavy overlap, such as barge-in while previous audio drains, could attribute audio to a neighbouring window.
+
+## Earlier verified result — Gate D: PASS
 
 ### Simulation vs detection
 - **Simulation (this gate):** the backend deterministically and permanently drops bot output audio after the configured number of user-triggered assistant responses.
