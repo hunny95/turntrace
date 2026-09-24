@@ -5,7 +5,7 @@ This file is working material for the pull-request description. Keep it factual 
 ## Summary
 TurnTrace adds a realtime voice-agent session inspection workflow using Pipecat, with stored recordings/transcripts, user-to-bot latency visualization, deterministic silent-output failure injection, and independent post-call freeze detection.
 
-**Current state:** Gate A (realtime voice path) and Gate B (session recording + transcript persistence) are implemented and verified. Latency, freeze injection/detection, and the review UI are pending.
+**Current state:** Gate A (realtime voice path), Gate B (session recording + transcript persistence), and Gate C (per-turn user-to-bot latency) are implemented and verified. Freeze injection/detection and the review UI are pending.
 
 ## Implementation approach
 ### Gate A — realtime voice path (done)
@@ -49,6 +49,30 @@ TurnTrace adds a realtime voice-agent session inspection workflow using Pipecat,
   4. Finalization is idempotent.
 - **Schema:** `{id, startedAt, durationMs, recording: {file, sampleRate, channels, channelLayout: ["user","bot"]} | null, transcript: [{role, text, timestampMs}]}`.
 
+### Gate C — per-turn user-to-bot latency (done)
+User-to-bot latency is measured from actual user speech end to first emitted bot audio.
+- **Start (`userStopMs`):**
+  - `VADUserStoppedSpeakingFrame.timestamp - stop_secs`, the moment the user physically stopped speaking, converted to the session clock.
+  - It precedes turn release, so the VAD stop delay, the Smart Turn / endpointing wait, and STT finalization are all counted.
+- **End (`botStartMs`):**
+  - The first bot `OutputAudioRawFrame` seen after `transport.output()`, following a `BotStartedSpeakingFrame`.
+  - The output transport forwards audio only after writing it to the client, so this is the first emitted audio. It is the same frame the recorder captures.
+- **Clock:** `latencyMs = botStartMs - userStopMs`, on the same recording-aligned session clock as Gate B.
+- **Where timestamps are taken:** in-pipeline, in the existing post-output clock processor. Pipecat observers receive frames through asynchronous queues, so their clock reads lag.
+- **Turn correlation:** a small framework-free tracker (`server/turn_tracker.py`).
+  - Each finalized user turn gets an integer `turnId`.
+  - Only the newest finalized turn can be waiting for bot audio. It stops waiting when:
+    - the LLM fails (reusing the failed-turn cleanup's error detection)
+    - a new user turn starts
+    - its latency is recorded
+  - The assistant transcript entry takes the waiting turn's id.
+  - The proactive greeting has `turnId: null` and no latency.
+- **Failed turns:**
+  - The user text stays in the transcript with its `turnId`, and there is no latency entry.
+  - A later response can't be assigned to it.
+  - A turn whose audio never plays gets no latency, even if assistant text exists.
+- **Schema additions:** `turnId` on each transcript entry, plus top-level `latencies: [{turnId, userStopMs, botStartMs, latencyMs}]`. Transcript `timestampMs` keeps its event-time meaning and is not a latency field.
+
 ## Architecture
 ```text
 Next.js UI → session controller → Pipecat SmallWebRTC client
@@ -66,7 +90,11 @@ _Pending (Gate D)._ Gate B already places the recorder downstream of the output 
 _Pending (Gate E)._
 
 ## Latency
-_Pending (Gate C)._ Observations from Gate A manual testing (not yet measured by TurnTrace itself):
+User-to-bot latency is measured from actual user speech end to first emitted bot audio. See Gate C above.
+
+The verification session measured 2378 ms and 2387 ms for its two turns.
+
+Earlier per-provider observations from Gate A manual testing:
 - Deepgram TTFB ≈ 0.5–0.8 s.
 - Cartesia TTFB ≈ 0.1–0.3 s.
 - Gemini TTFB ≈ 1.4–4.6 s, once ≈ 7 s.
@@ -100,6 +128,11 @@ Gate B:
   - A real Gemini 503 on one turn was preserved faithfully: the user entry was kept and no assistant text or audio was fabricated.
 
 ## Approaches considered / trade-offs
+- **A turn-aware tracker instead of the native latency observer:**
+  - Pipecat 1.11.0's `UserBotLatencyObserver` was verified to use the same physical start and end points. TurnTrace keeps those semantics.
+  - It is not used directly: it emits a bare latency value with no turn identity or timestamps, and it stays armed after a failed turn. A later reply could therefore be charged to an unanswered question.
+- **Physical speech end, not turn release:** starting the timer at the user-turn-stopped event would hide the Smart Turn / endpointing wait, which the user does experience.
+- **First emitted audio, not LLM/TTS time to first byte:** timing the audio the output transport actually wrote keeps latency consistent with the recording, and means suppressed audio produces no false measurement.
 - **Recorder after the output transport, not a TTS tap:** the recording must show what the user heard, so a later injected output failure is visible as silence. The assistant transcript comes from a separate path (the text frames the assistant aggregator receives), so the two sources of truth can diverge on purpose.
 - **Stereo over mono mix:** keeping user and bot on separate channels allows each side's audio energy to be analyzed later without source separation.
 - **Pipecat transcript events over log parsing or re-transcription:** these events carry the same finalized text that enters the LLM context, and they cost no extra provider calls.
@@ -112,12 +145,44 @@ Gate B:
 - **Latency tuning deferred:** model choice, VAD, and Smart Turn parameters are unchanged until latency is measured per turn (Gate C).
 
 ## Known limitations
-- Transcript `timestampMs` values are the times events fired. They are not latency measurements; per-turn timing is added in Gate C.
+- Transcript `timestampMs` values are event times. Latency uses its own explicit `userStopMs` / `botStartMs` fields.
+- Assigning a `turnId` to the assistant turn relies on a timing margin, not a formal Pipecat ordering guarantee.
+  - Pipecat sends the LLM request before the handler that assigns the user turn id runs.
+  - That handler does no I/O and normally finishes almost immediately, while a real model response needs a network round trip.
+- There is no automated harness for these async orderings through the full pipeline. The latency tests drive the tracker directly in a fixed order.
+- Extremely unusual startup timing could, in theory, make `userStopMs` negative (there is no clamp). Live testing did not show this.
 - The test for final-only transcripts checks the event contract rather than driving the full user aggregator. The pre-output drop test uses a stand-in processor rather than the real output transport, whose forward-after-write behavior was verified in the source.
 - Recordings are held in memory until the call ends, which is fine for short sessions.
 - Retry behavior is unit-tested against the SDK's retry policy with simulated errors, not against a live 5xx.
 - A failed connect attempt displays the browser/client error message verbatim (not provider text).
 - Gemini latency varies widely; free-tier quota can produce 429s during long sessions.
+
+Gate C:
+- **Automated:** backend pytest 48/48. The 16 latency tests use a deterministic clock:
+  - a normal turn with exact values
+  - the greeting
+  - a failed turn followed by success, with and without an LLM error
+  - a turn superseded by new user speech
+  - duplicate bot audio
+  - endpointing delay included
+  - persisted JSON invariants
+  - a pass-through check via Pipecat test utilities
+  - the failed-turn transcript
+  - no provider services constructed
+  - assistant text without audio (no latency)
+  - a late or missing speech stop
+- **Independent QA:** found a defect: a finalized turn could lose its id if the speech-stop signal arrived after finalization. After the repair:
+  - a finalized turn keeps its id
+  - a late speech stop attaches only if the speech ended at or before finalization, so later noise can't shorten an earlier turn's latency
+  - a turn with no valid speech stop gets no invented latency
+
+  QA then passed.
+- **Manual:** one real session.
+  - The greeting had `turnId: null` and no latency.
+  - Two turns were correctly paired: 2378 ms and 2387 ms.
+  - `latencyMs = botStartMs − userStopMs`, and all values are within the WAV duration.
+  - The physical speech stop preceded the finalized-transcript event.
+  - Bot-channel RMS rose sharply immediately after each `botStartMs`.
 
 ## Future improvements
 _To be updated after final review._

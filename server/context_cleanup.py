@@ -21,6 +21,8 @@ addresses.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pipecat.frames.frames import ErrorFrame, Frame, LLMContextFrame
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -37,12 +39,24 @@ class FailedLLMTurnContextCleanup(FrameProcessor):
     pass through this link on their way further upstream.
     """
 
-    def __init__(self, context: LLMContext, llm: LLMService):
+    def __init__(
+        self,
+        context: LLMContext,
+        llm: LLMService,
+        on_llm_failed: Callable[[], None] | None = None,
+    ):
         super().__init__()
         self._context = context
         self._llm = llm
         # Context length when the most recent request was sent to the LLM.
         self._request_len: int | None = None
+        # Gate C: optional sync callback, invoked once per detected LLM
+        # failure, after context cleanup. Lets TurnTracker (server/
+        # turn_tracker.py) clear the pending turn's latency measurement
+        # without this module knowing anything about turns or latency --
+        # reuses this module's existing ErrorFrame detection point rather
+        # than re-implementing provider-failure classification elsewhere.
+        self._on_llm_failed = on_llm_failed
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -55,6 +69,8 @@ class FailedLLMTurnContextCleanup(FrameProcessor):
             and frame.processor is self._llm
         ):
             self._drop_trailing_user_messages()
+            if self._on_llm_failed is not None:
+                self._on_llm_failed()
 
         await self.push_frame(frame, direction)
 

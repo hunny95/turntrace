@@ -77,32 +77,42 @@ def test_path_traversal_id_is_rejected(tmp_path):
 
 def test_final_user_text_is_appended(tmp_path):
     session = Session(sessions_dir=tmp_path)
-    session.add_user_turn("hello there")
+    session.add_user_turn("hello there", 1)
     assert len(session.transcript) == 1
     entry = session.transcript[0]
     assert entry.role == "user"
     assert entry.text == "hello there"
+    assert entry.turn_id == 1
     assert isinstance(entry.timestamp_ms, int)
 
 
 @pytest.mark.parametrize("content", [None, ""])
 def test_empty_or_none_user_content_is_skipped(tmp_path, content):
     session = Session(sessions_dir=tmp_path)
-    session.add_user_turn(content)
+    session.add_user_turn(content, 1)
     assert session.transcript == []
 
 
 def test_assistant_text_is_appended(tmp_path):
     session = Session(sessions_dir=tmp_path)
-    session.add_assistant_turn("hi, how can I help?")
+    session.add_assistant_turn("hi, how can I help?", 1)
     assert len(session.transcript) == 1
     assert session.transcript[0].role == "assistant"
+    assert session.transcript[0].turn_id == 1
+
+
+def test_assistant_text_with_no_turn_id_is_null(tmp_path):
+    """The proactive greeting has no pending user turn."""
+    session = Session(sessions_dir=tmp_path)
+    session.add_assistant_turn("hi! how can I help?", None)
+    assert session.transcript[0].turn_id is None
+    assert session.transcript[0].to_json()["turnId"] is None
 
 
 @pytest.mark.parametrize("content", [None, ""])
 def test_empty_or_none_assistant_content_is_skipped(tmp_path, content):
     session = Session(sessions_dir=tmp_path)
-    session.add_assistant_turn(content)
+    session.add_assistant_turn(content, 1)
     assert session.transcript == []
 
 
@@ -116,9 +126,9 @@ def test_timestamps_are_nondecreasing_ints_relative_to_t0(tmp_path, monkeypatch)
     # First call to monotonic() re-anchors t0 (still un-set-by-audio) to
     # 100.0; subsequent add_* calls use later ticks.
     session._t0 = 100.0
-    session.add_user_turn("one")
-    session.add_assistant_turn("two")
-    session.add_user_turn("three")
+    session.add_user_turn("one", 1)
+    session.add_assistant_turn("two", 1)
+    session.add_user_turn("three", 2)
 
     timestamps = [e.timestamp_ms for e in session.transcript]
     assert timestamps == sorted(timestamps)
@@ -188,18 +198,18 @@ def test_bot_handler_forwards_only_message_content(tmp_path):
 
     # Mirrors: async def on_user_turn_stopped(aggregator, strategy, message)
     user_message = UserTurnStoppedMessage(content="hi", timestamp="t")
-    session.add_user_turn(user_message.content)
+    session.add_user_turn(user_message.content, 1)
 
     # Realtime-mode case: content is None; must be skipped, not crash.
     realtime_message = UserTurnStoppedMessage(content=None, timestamp="t")
-    session.add_user_turn(realtime_message.content)
+    session.add_user_turn(realtime_message.content, 2)
 
     # Mirrors: async def on_assistant_turn_stopped(aggregator, message)
     assistant_message = AssistantTurnStoppedMessage(content="hello!", interrupted=False, timestamp="t")
-    session.add_assistant_turn(assistant_message.content)
+    session.add_assistant_turn(assistant_message.content, 1)
 
     empty_assistant_message = AssistantTurnStoppedMessage(content="", interrupted=True, timestamp="t")
-    session.add_assistant_turn(empty_assistant_message.content)
+    session.add_assistant_turn(empty_assistant_message.content, 1)
 
     assert [e.text for e in session.transcript] == ["hi", "hello!"]
     assert [e.role for e in session.transcript] == ["user", "assistant"]
@@ -356,8 +366,8 @@ async def _freeze_invariant_bot_audio_dropped_before_recorder(tmp_path):
 
 def _make_finalized_session(tmp_path, with_audio: bool = True) -> Session:
     session = Session(sessions_dir=tmp_path)
-    session.add_user_turn("hi")
-    session.add_assistant_turn("hello!")
+    session.add_user_turn("hi", 1)
+    session.add_assistant_turn("hello!", 1)
     if with_audio:
         audio = tone_bytes(440.0, 0.05) + tone_bytes(880.0, 0.05)  # interleaved-ish stand-in
         # Build a real interleaved stereo buffer: 0.05s at 24000 Hz stereo.
@@ -388,7 +398,13 @@ async def _finalize_writes_wav_and_json_with_matching_duration(tmp_path):
     assert payload["recording"]["file"] == "recording.wav"
     assert payload["recording"]["channelLayout"] == ["user", "bot"]
     assert abs(payload["durationMs"] - wav_duration_ms) <= 1
-    assert payload["transcript"][0] == {"role": "user", "text": "hi", "timestampMs": payload["transcript"][0]["timestampMs"]}
+    assert payload["transcript"][0] == {
+        "turnId": 1,
+        "role": "user",
+        "text": "hi",
+        "timestampMs": payload["transcript"][0]["timestampMs"],
+    }
+    assert payload["latencies"] == []
 
 
 def test_finalize_is_idempotent(tmp_path):

@@ -4,18 +4,95 @@
 Expected implementation branch: `feat/voice-session-inspector`
 
 ## Current gate
-Gates A–B complete. Next: Gate C — turn latency capture and persistence.
+Gates A–C complete. Next: Gate D — deterministic permanent bot-audio freeze injection.
 
 ## Gates
 - [x] A — realtime voice path works for several turns
 - [x] B — completed session creates transcript + playable recording
-- [ ] C — per-turn user-to-bot latency captured
+- [x] C — per-turn user-to-bot latency captured
 - [ ] D — deterministic permanent bot-audio freeze injection works
 - [ ] E — independent post-call freeze detection works; trailing silence is not a freeze
 - [ ] F — Next.js review UI shows playback, transcript, latency, freeze region
 - [ ] G — final tests/build/security/PR notes/demo instructions complete
 
-## Last verified result — Gate B: PASS
+## Last verified result — Gate C: PASS
+
+### Metric
+User-to-bot latency is measured from actual user speech end to first emitted bot audio.
+- `userStopMs` = `VADUserStoppedSpeakingFrame.timestamp - stop_secs`, which is the physical end of speech, converted to the session clock. This includes the VAD stop delay, the Smart Turn / endpointing wait, STT finalization, LLM, TTS, and output scheduling.
+- `botStartMs` = the first bot `OutputAudioRawFrame` observed after `transport.output()`, following a `BotStartedSpeakingFrame`. The output transport forwards an audio frame only after writing it to the client, so this is the first emitted audio, and it is the same frame the recorder captures.
+- `latencyMs = botStartMs - userStopMs`, on the Gate B recording-aligned session clock.
+
+### Design (verified against installed Pipecat 1.11.0 source)
+- **Native observer:** `UserBotLatencyObserver` uses the same start and end points: VAD stop minus `stop_secs`, and `BotStartedSpeakingFrame`. It is not used directly:
+  - it emits only a bare latency value, with no turn identity or timestamps
+  - it stays armed after a failed turn until the next VAD start
+- **Timestamps:** taken inside the pipeline by the existing post-output `SessionClockAnchor`, not in a `BaseObserver`. Observers are fed through per-observer asyncio queues (`pipeline/worker_observer.py`), which delays their clock reads.
+- **Turn tracker:** `server/turn_tracker.py` is framework-free.
+  - Each finalized user turn gets an integer `turnId`.
+  - At most one turn is pending bot audio. It is cleared by:
+    - an LLM failure (`FailedLLMTurnContextCleanup` `on_llm_failed` callback, same `ErrorFrame` detection point)
+    - a new `UserStartedSpeakingFrame`
+    - its own measurement
+  - The assistant entry takes the pending turn's id at `on_assistant_turn_started`.
+  - The proactive greeting has `turnId: null` and no latency.
+- **Schema:** each transcript entry gains `turnId`. A top-level `latencies: [{turnId, userStopMs, botStartMs, latencyMs}]` is added. Transcript `timestampMs` keeps its Gate B event-time meaning.
+- Details: `.claude/tasks/004-gate-c-turn-latency.md`.
+
+### QA defect and repair (one cycle)
+- **Defect:** QA found that a finalized user turn lost its `turnId` if its VAD-stop frame reached the tap after finalization. Its assistant entry was then labelled `null`.
+- **Repair:**
+  - A finalized turn always keeps its id.
+  - A late VAD stop attaches only if it is at or before that turn's finalization time, so later noise cannot shorten an earlier turn's latency.
+  - A turn with no valid VAD stop gets no latency.
+  - Three regression tests were added.
+- QA re-verified: PASS.
+
+### Human end-to-end test (one real session)
+- Session `085a9d47-…`: `durationMs` 28600 equals the WAV length; stereo, 24 kHz, 16-bit.
+- Greeting: `turnId: null`, no latency.
+- User and assistant entries for turns 1 and 2 share their ids. No duplicate latency records.
+- Latencies (`latencyMs = botStartMs − userStopMs`, all values within `durationMs`):
+
+  | Turn | userStopMs | botStartMs | latencyMs |
+  | --- | --- | --- | --- |
+  | 1 | 8925 | 11303 | 2378 |
+  | 2 | 18645 | 21032 | 2387 |
+
+- Turn 1 physical stop (8925) precedes the finalized-transcript event (9370). The latency is measured from speech end, not from finalization.
+- Bot-channel RMS in the 300 ms before / after `botStartMs`: 313 → 6819 (turn 1), 18 → 5178 (turn 2).
+- The verifier script returned PASS.
+
+### Automated / QA
+- Backend pytest 48/48, including 16 Gate C tests in `test_turn_latency.py` plus the updated session tests:
+  - normal turn with exact values
+  - greeting
+  - failure followed by success, both with and without an `ErrorFrame`
+  - superseded turn
+  - duplicate audio
+  - endpointing inclusion
+  - persisted JSON
+  - pass-through through `run_test`
+  - failed-turn transcript
+  - no provider services constructed
+  - Gate D precursor
+  - late or missing VAD stop
+- Frontend 5/5, `tsc`, ESLint and `next build` pass.
+- Zero real provider calls in tests.
+- Independent QA answers:
+  1. The Smart Turn / endpointing wait is included: yes.
+  2. A response after a failed 503 can be attributed to the failed turn: no.
+  3. A turn whose audio is suppressed before the output will have no latency even though its assistant text carries the `turnId`: yes.
+
+### Accepted residual risks
+- Pipecat pushes the LLM request before the `on_user_turn_stopped` handler task that allocates the `turnId` runs (`llm_response_universal.py` `_maybe_emit_user_turn_stopped`). The association with the assistant turn therefore relies on a timing margin, not a formal ordering guarantee:
+  - the handler does no I/O
+  - a real model response needs a network round trip
+  - this is documented in `bot.py`
+- There is no automated harness for these async orderings through the real pipeline; the tests drive the tracker in a fixed order.
+- Extremely unusual startup congestion could, in theory, make `userStopMs` negative (there is no clamp). The live test did not show this.
+
+## Earlier verified result — Gate B: PASS
 
 ### Design (verified against installed Pipecat 1.11.0 source)
 - Recording:
@@ -74,9 +151,6 @@ Gates A–B complete. Next: Gate C — turn latency capture and persistence.
 - Zero real provider calls in tests.
 - Independent QA re-verified the push-after-write behavior and the cleanup ordering in the Pipecat source.
   - It answered yes to: "will a future pre-output FreezeGate show bot silence while the assistant transcript still has text?"
-
-### Notes for Gate C
-Transcript `timestampMs` values are event times, not latency measurements. Gate C adds explicit per-turn timing fields.
 
 ## Earlier verified result — Gate A: PASS
 

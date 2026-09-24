@@ -38,14 +38,46 @@ CHANNEL_LAYOUT = ["user", "bot"]
 
 @dataclass
 class TranscriptEntry:
-    """One finalized transcript line, stamped with the session clock."""
+    """One finalized transcript line, stamped with the session clock.
+
+    turn_id: the user turn this entry belongs to (user entries) or answers
+    (assistant entries). None only for an assistant entry with no pending
+    user turn (the proactive greeting, or any response with no pending user
+    turn) -- see server/turn_tracker.py.
+    """
 
     role: str
     text: str
     timestamp_ms: int
+    turn_id: int | None
 
     def to_json(self) -> dict:
-        return {"role": self.role, "text": self.text, "timestampMs": self.timestamp_ms}
+        return {
+            "turnId": self.turn_id,
+            "role": self.role,
+            "text": self.text,
+            "timestampMs": self.timestamp_ms,
+        }
+
+
+@dataclass
+class LatencyEntry:
+    """One measured user-to-bot latency (Gate C). See
+    server/turn_tracker.py for how turn_id/user_stop_ms/bot_start_ms are
+    derived.
+    """
+
+    turn_id: int
+    user_stop_ms: int
+    bot_start_ms: int
+
+    def to_json(self) -> dict:
+        return {
+            "turnId": self.turn_id,
+            "userStopMs": self.user_stop_ms,
+            "botStartMs": self.bot_start_ms,
+            "latencyMs": self.bot_start_ms - self.user_stop_ms,
+        }
 
 
 class Session:
@@ -74,6 +106,7 @@ class Session:
         self._t0_set_by_audio = False
 
         self.transcript: list[TranscriptEntry] = []
+        self.latencies: list[LatencyEntry] = []
 
         self.audio: bytes | None = None
         self.sample_rate: int | None = None
@@ -109,17 +142,31 @@ class Session:
 
     # -- Transcript --------------------------------------------------------
 
-    def add_user_turn(self, content: str | None) -> None:
-        """Append a finalized user transcript entry. Skips empty/None content."""
-        if not content:
-            return
-        self.transcript.append(TranscriptEntry("user", content, self.rel_ms()))
+    def add_user_turn(self, content: str | None, turn_id: int) -> None:
+        """Append a finalized user transcript entry. Skips empty/None content.
 
-    def add_assistant_turn(self, content: str | None) -> None:
-        """Append a finalized assistant transcript entry. Skips empty content."""
+        turn_id is allocated by the caller (server/turn_tracker.py) only for
+        non-empty content, so every persisted user entry carries one.
+        """
         if not content:
             return
-        self.transcript.append(TranscriptEntry("assistant", content, self.rel_ms()))
+        self.transcript.append(TranscriptEntry("user", content, self.rel_ms(), turn_id))
+
+    def add_assistant_turn(self, content: str | None, turn_id: int | None) -> None:
+        """Append a finalized assistant transcript entry. Skips empty content.
+
+        turn_id is the user turn this response answers, or None for the
+        proactive greeting / any response with no pending user turn.
+        """
+        if not content:
+            return
+        self.transcript.append(TranscriptEntry("assistant", content, self.rel_ms(), turn_id))
+
+    # -- Latency -----------------------------------------------------------
+
+    def add_latency(self, turn_id: int, user_stop_ms: int, bot_start_ms: int) -> None:
+        """Persist one measured user-to-bot latency for turn_id."""
+        self.latencies.append(LatencyEntry(turn_id, user_stop_ms, bot_start_ms))
 
     # -- Recording -----------------------------------------------------------
 
@@ -156,6 +203,7 @@ class Session:
                 "durationMs": duration_ms,
                 "recording": recording_info,
                 "transcript": [entry.to_json() for entry in self.transcript],
+                "latencies": [entry.to_json() for entry in self.latencies],
             }
 
             self._write_json(payload)
