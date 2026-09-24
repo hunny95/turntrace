@@ -5,7 +5,8 @@ Browser mic --> SmallWebRTC --> Deepgram STT --> Gemini LLM --> Cartesia TTS
 
 Gate B adds per-session recording + transcript persistence (server/session.py).
 Gate C adds per-turn user-to-bot latency capture (server/turn_tracker.py).
-Freeze injection is a later gate (D).
+Gate D adds deterministic, permanent bot-audio freeze injection
+(server/freeze_gate.py), placed after `tts` and before `transport.output()`.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from config import (
     CARTESIA_VOICE_ID,
+    FREEZE_AFTER_ASSISTANT_TURNS,
     GEMINI_MODEL,
     GEMINI_RETRY_ATTEMPTS,
     GEMINI_RETRY_EXP_BASE,
@@ -53,6 +55,7 @@ from config import (
     GEMINI_RETRY_MAX_DELAY,
 )
 from context_cleanup import FailedLLMTurnContextCleanup
+from freeze_gate import FreezeGate
 from session import Session
 from turn_tracker import TurnTracker
 
@@ -206,6 +209,7 @@ async def run_bot(webrtc_connection) -> None:
 
     tracker = TurnTracker()
     context_cleanup = FailedLLMTurnContextCleanup(context, llm, on_llm_failed=tracker.on_llm_failed)
+    freeze_gate = FreezeGate(tracker, FREEZE_AFTER_ASSISTANT_TURNS)
 
     clock_anchor = SessionClockAnchor(session, tracker)
     audio_buffer = AudioBufferProcessor(
@@ -222,6 +226,7 @@ async def run_bot(webrtc_connection) -> None:
             context_cleanup,  # Drop unanswered turn from context on LLM failure
             llm,  # LLM
             tts,  # Text-to-speech
+            freeze_gate,  # Gate D: drop bot audio (only) before output, once frozen
             transport.output(),  # Transport bot output
             clock_anchor,  # Gate B: anchor session t0; Gate C: VAD stop /
             # turn-start / first-bot-audio taps for TurnTracker

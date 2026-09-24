@@ -4,18 +4,68 @@
 Expected implementation branch: `feat/voice-session-inspector`
 
 ## Current gate
-Gates A–C complete. Next: Gate D — deterministic permanent bot-audio freeze injection.
+Gates A–D complete. Next: Gate E — independent post-call freeze detection.
 
 ## Gates
 - [x] A — realtime voice path works for several turns
 - [x] B — completed session creates transcript + playable recording
 - [x] C — per-turn user-to-bot latency captured
-- [ ] D — deterministic permanent bot-audio freeze injection works
+- [x] D — deterministic permanent bot-audio freeze injection works
 - [ ] E — independent post-call freeze detection works; trailing silence is not a freeze
 - [ ] F — Next.js review UI shows playback, transcript, latency, freeze region
 - [ ] G — final tests/build/security/PR notes/demo instructions complete
 
-## Last verified result — Gate C: PASS
+## Last verified result — Gate D: PASS
+
+### Simulation vs detection
+- **Simulation (this gate):** the backend deterministically and permanently drops bot output audio after the configured number of user-triggered assistant responses.
+- **Detection:** not implemented yet. Gate E will detect a freeze independently from ordinary persisted session evidence (recording + transcript + timing).
+
+### Design (verified against installed Pipecat 1.11.0 source)
+- **Placement:** `… llm → tts → freeze_gate → transport.output() → clock_anchor → audio_buffer → assistant_aggregator`. Backend-only (`server/freeze_gate.py`); a fresh gate per session, no module-level state, so every new call starts unfrozen.
+- **Config:** `FREEZE_AFTER_ASSISTANT_TURNS` (default 2). `0` disables; negative or non-integer values fail config validation, naming only the variable.
+- **Counting:**
+  - At `LLMFullResponseStartFrame` (which the TTS service serializes in order ahead of that response's audio) the gate snapshots the pending user turn id from `TurnTracker` (new read-only `pending_turn_id`).
+  - A response counts once, at its first bot audio frame, and only if it answers a user turn. The proactive greeting (no pending turn) never counts.
+  - `GoogleLLMService` pushes `LLMFullResponseStartFrame` before the request, so a failed or empty reply still produces a start/end pair; counting at first audio means provider failures and empty replies do not consume the threshold.
+- **Suppression:**
+  - When the count exceeds the threshold, the gate freezes before forwarding that first frame, so the entire third response is silent. The state never unfreezes.
+  - Frozen `OutputAudioRawFrame`s (incl. `TTSAudioRawFrame`) are dropped, never replaced with silence. No audio reaches the output transport, so no `BotStartedSpeakingFrame`, no browser audio, no recorded bot audio, and no Gate C latency.
+  - All text/control frames pass unchanged, so the assistant transcript survives. Cartesia runs with `pause_frame_processing=False`, so it never waits on bot-stopped-speaking signals that dropped audio would withhold.
+- **Detector independence:** no threshold, flag, activation time, marker or sidecar is written to any artifact. The only trace is one backend info log line on activation, which is not an artifact.
+- Details: `.claude/tasks/005-gate-d-freeze-injection.md`.
+
+### Human end-to-end test (one real session)
+- Session `3d804728-…`: `durationMs` 174418 vs WAV 174419 ms; stereo, 24 kHz, 16-bit, layout user/bot.
+- The greeting did not count. Turns 1–2 had bot audio and latency; from turn 3 onward bot-channel RMS was 0 for the rest of the call.
+
+  | Turn | Assistant text | Latency (ms) | Bot RMS, 7 s after |
+  | --- | --- | --- | --- |
+  | 1 | present | 2296 | ≈ 3000 |
+  | 2 | present | 7902 | ≈ 2442 |
+  | 3 | "Two plus two equals four." | none | 0 |
+  | 4 | "As I mentioned, two plus two is four." | none | 0 |
+  | 6 | "The sky is typically blue during a clear day." | none | 0 |
+
+- User audio continued on the user channel after the freeze (RMS ≈ 900–1400 on turns 3–6).
+- The final question was split by turn detection into turn 5 ("What is the") and turn 6 ("color of sky?"). This is Smart Turn segmentation, not a Gate D defect, and it was not tuned here. Turn 6 still produced assistant text while audio stayed suppressed, which is further evidence that the pipeline stayed alive.
+- `session.json` top-level keys: `durationMs, id, latencies, recording, startedAt, transcript`. The session directory holds only `recording.wav` and `session.json`. The local verifier script returned PASS.
+
+### Automated / QA
+- Backend pytest 63/63, including 15 Gate D tests in `test_freeze_gate.py`:
+  - greeting not counted; turns 1–2 audible
+  - turn 3 dropped from its first frame; turns 4–5 dropped
+  - text/control/interruption pass-through while frozen; no silent substitute frames
+  - new session starts unfrozen; failed/empty reply does not count
+  - Gate C chain: frozen turn keeps text + `turnId` with no latency
+  - Gate B chain: real `AudioBufferProcessor` keeps user audio and pre-freeze bot audio, silent bot channel after
+  - `session.json` denylist for freeze/simulator terms; config validation; no provider services constructed
+- Independent QA: PASS. Answers: a triggering-turn audio frame can reach `transport.output()`: no; later user speech still produces persisted assistant text: yes; Gate E could read a hidden flag instead of evidence: no; a frozen turn has text + `turnId` with no audio and no latency: yes.
+
+### Known limitation
+- If the user starts speaking while the previous response's audio is still draining, the user-turn start can clear the pending turn before the next response's start frame reaches the gate, so that response's turn association (and therefore the count) can be ambiguous. QA verified that once frozen, no later bot audio can leak regardless. The scripted human test avoided overlap by waiting between turns.
+
+## Earlier verified result — Gate C: PASS
 
 ### Metric
 User-to-bot latency is measured from actual user speech end to first emitted bot audio.

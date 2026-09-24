@@ -146,6 +146,22 @@ class TurnTracker:
         docstring)."""
         self.response_turn_id = self._pending.turn_id if self._pending is not None else None
 
+    @property
+    def pending_turn_id(self) -> int | None:
+        """Read-only: the turn id of the currently pending (finalized, not yet
+        measured/abandoned/failed) user turn, or ``None``.
+
+        Added for Gate D's FreezeGate, which must snapshot which user turn a
+        response answers at ``LLMFullResponseStartFrame`` -- upstream of (and
+        earlier than) `response_turn_id`'s own stamp at the assistant
+        aggregator's ``on_assistant_turn_started`` (see bot.py). This is a
+        plain read: unlike `on_bot_audio_started`, it does not consume or
+        otherwise mutate `_pending`, so reading it has no effect on Gate C
+        latency measurement. See .claude/tasks/005-gate-d-freeze-injection.md,
+        "TURN-COUNTING RULES".
+        """
+        return self._pending.turn_id if self._pending is not None else None
+
     def on_bot_audio_started(self, bot_start_ms: int) -> LatencyResult | None:
         """First emitted bot audio of a response (post-output tap).
 

@@ -5,7 +5,7 @@ This file is working material for the pull-request description. Keep it factual 
 ## Summary
 TurnTrace adds a realtime voice-agent session inspection workflow using Pipecat, with stored recordings/transcripts, user-to-bot latency visualization, deterministic silent-output failure injection, and independent post-call freeze detection.
 
-**Current state:** Gate A (realtime voice path), Gate B (session recording + transcript persistence), and Gate C (per-turn user-to-bot latency) are implemented and verified. Freeze injection/detection and the review UI are pending.
+**Current state:** Gate A (realtime voice path), Gate B (session recording + transcript persistence), Gate C (per-turn user-to-bot latency) and Gate D (deterministic bot-audio freeze simulation) are implemented and verified. Freeze detection and the review UI are pending.
 
 ## Implementation approach
 ### Gate A — realtime voice path (done)
@@ -78,16 +78,31 @@ User-to-bot latency is measured from actual user speech end to first emitted bot
 Next.js UI → session controller → Pipecat SmallWebRTC client
   ⇄ SmallWebRTC ⇄ Pipecat backend:
     Deepgram STT → turn aggregation (Silero/Smart Turn) → failed-turn cleanup
-    → Gemini → Cartesia TTS → audio out → recorder (stereo, emitted audio)
+    → Gemini → Cartesia TTS → freeze gate (drops bot audio once frozen)
+    → audio out → recorder (stereo, emitted audio)
     → assistant aggregation → session.json + recording.wav on disconnect
 ```
 Provider credentials are read only by the backend. CORS is restricted to the configured frontend origin.
 
-## Freeze simulation
-_Pending (Gate D)._ Gate B already places the recorder downstream of the output transport, so audio dropped between TTS and output will record as bot-channel silence while the assistant transcript keeps the generated text.
+## Freeze simulation (Gate D, done)
+**Simulation:** the backend deterministically and permanently drops bot output audio after the configured number of user-triggered assistant responses.
+**Detection:** not implemented yet. Gate E will independently detect a freeze from ordinary persisted session evidence.
+
+- **Placement:** a backend-only `FreezeGate` (`server/freeze_gate.py`) sits after Cartesia TTS and before `transport.output()`. Dropped audio therefore never reaches the browser, never triggers `BotStartedSpeakingFrame`, never reaches the recorder, and never produces a latency.
+- **Config:** `FREEZE_AFTER_ASSISTANT_TURNS=2` by default; `0` disables the simulator; invalid values fail config validation.
+- **Counting:** one unit per user-triggered assistant response, not per TTS chunk, sentence or token.
+  - When a response starts, the gate records which user turn it answers (from the latency tracker). The proactive greeting answers none and never counts.
+  - A response counts at its first bot audio frame. Gemini's service emits the response-start frame before making the request, so counting at audio means provider failures and empty replies do not consume the threshold.
+- **Suppression:**
+  - The first two user-triggered responses stay audible.
+  - The gate freezes before forwarding the third response's first audio frame, so that whole response is silent, and every later bot audio frame in the session is dropped. There is no unfreeze, timer or randomness.
+  - Audio frames are dropped, not replaced with silent frames, so nothing looks like the bot started speaking.
+  - Text and control frames continue downstream, so user input, STT, the LLM and the assistant transcript keep working. Frozen turns keep their `turnId` and text and get no latency.
+- **Per session:** a new gate is built for each call, so every call starts unfrozen.
+- **Independence:** nothing about the simulator (threshold, flag, activation time, marker text or sidecar file) is written to `session.json` or any other artifact. A single backend log line marks activation for humans only.
 
 ## Freeze detection and independence
-_Pending (Gate E)._
+_Pending (Gate E)._ The detector must work from the recording, transcript, turn ids and ordinary timing only.
 
 ## Latency
 User-to-bot latency is measured from actual user speech end to first emitted bot audio. See Gate C above.
@@ -134,6 +149,8 @@ Gate B:
 - **Physical speech end, not turn release:** starting the timer at the user-turn-stopped event would hide the Smart Turn / endpointing wait, which the user does experience.
 - **First emitted audio, not LLM/TTS time to first byte:** timing the audio the output transport actually wrote keeps latency consistent with the recording, and means suppressed audio produces no false measurement.
 - **Recorder after the output transport, not a TTS tap:** the recording must show what the user heard, so a later injected output failure is visible as silence. The assistant transcript comes from a separate path (the text frames the assistant aggregator receives), so the two sources of truth can diverge on purpose.
+- **Freeze gate before the output transport, dropping frames:** muting after the recorder would leave the recording and latency showing audio the user never heard. Replacing audio with silent frames would still make the transport report that the bot started speaking and create a false latency. Dropping frames upstream of the output keeps the recording, latency and browser consistent.
+- **Counting at first audio, not at response start:** Gemini's service announces a response before its request succeeds, so counting at the start would let a provider error consume the threshold.
 - **Stereo over mono mix:** keeping user and bot on separate channels allows each side's audio energy to be analyzed later without source separation.
 - **Pipecat transcript events over log parsing or re-transcription:** these events carry the same finalized text that enters the LLM context, and they cost no extra provider calls.
 - **Write after pipeline cleanup:** the recorder hands over its data from event-handler tasks. Writing the files only after the runner returns ensures those tasks are complete, so nothing is truncated and no partial JSON is left behind.
@@ -155,6 +172,7 @@ Gate B:
 - Recordings are held in memory until the call ends, which is fine for short sessions.
 - Retry behavior is unit-tested against the SDK's retry policy with simulated errors, not against a live 5xx.
 - A failed connect attempt displays the browser/client error message verbatim (not provider text).
+- Freeze counting: if the user starts speaking while the previous response's audio is still finishing, the association between the next response and its user turn (and therefore the freeze count) can be ambiguous. Once frozen, no later bot audio can leak regardless. The scripted test avoids overlap by waiting between turns.
 - Gemini latency varies widely; free-tier quota can produce 429s during long sessions.
 
 Gate C:
@@ -183,6 +201,22 @@ Gate C:
   - `latencyMs = botStartMs − userStopMs`, and all values are within the WAV duration.
   - The physical speech stop preceded the finalized-transcript event.
   - Bot-channel RMS rose sharply immediately after each `botStartMs`.
+
+Gate D:
+- **Automated:** backend pytest 63/63, including 15 freeze tests with synthetic frames and no providers:
+  - greeting not counted; turns 1–2 audible; turn 3 dropped from its first frame; later turns dropped
+  - text/control pass-through while frozen; no silent substitute frames
+  - new session starts unfrozen; a failed or empty reply does not count
+  - through the real latency chain, a frozen turn keeps text + `turnId` and gets no latency
+  - through a real `AudioBufferProcessor`, user audio and pre-freeze bot audio are recorded and the bot channel is silent afterwards
+  - `session.json` contains no freeze or simulator field; config validation
+- **Independent QA:** passed. No audio from the triggering turn can reach the output transport; later user speech still produces persisted assistant text; the detector cannot read a hidden flag; a frozen turn has text + `turnId` but no audio and no latency.
+- **Manual:** one real session of about 174 s (`durationMs` matches the WAV within 1 ms).
+  - Turns 1 and 2 had bot audio and latencies of 2296 ms and 7902 ms.
+  - From turn 3 on, bot-channel RMS was 0 for the rest of the call, and no later turn has a latency.
+  - Assistant text was still persisted for turns 3, 4 and 6, and user audio kept being recorded.
+  - The last question was split by turn detection into two user turns (5 and 6). That is ordinary segmentation, not a freeze defect; turn 6 still produced assistant text with no audio.
+  - `session.json` keys: `durationMs, id, latencies, recording, startedAt, transcript`; the session directory holds only `recording.wav` and `session.json`.
 
 ## Future improvements
 _To be updated after final review._

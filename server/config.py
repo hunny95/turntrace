@@ -32,9 +32,27 @@ FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
 # regardless of where the server is launched from.
 SESSIONS_DIR = Path(__file__).resolve().parent.parent / "data" / "sessions"
 
-# Gate D config (read here so the single source of truth lives in one module;
-# not used until the freeze-injection processor is implemented in a later gate).
-FREEZE_AFTER_ASSISTANT_TURNS = int(os.environ.get("FREEZE_AFTER_ASSISTANT_TURNS", "2"))
+# Gate D config: number of user-associated assistant responses that stay
+# audible before the freeze gate (server/freeze_gate.py) permanently drops
+# all later bot audio. 0 disables the gate (never freezes).
+def _parse_freeze_after_assistant_turns() -> int:
+    raw = os.environ.get("FREEZE_AFTER_ASSISTANT_TURNS", "2")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "FREEZE_AFTER_ASSISTANT_TURNS must be a non-negative integer "
+            "(0 disables freeze injection)."
+        ) from exc
+    if value < 0:
+        raise RuntimeError(
+            "FREEZE_AFTER_ASSISTANT_TURNS must be a non-negative integer "
+            "(0 disables freeze injection)."
+        )
+    return value
+
+
+FREEZE_AFTER_ASSISTANT_TURNS = _parse_freeze_after_assistant_turns()
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 CARTESIA_VOICE_ID = os.environ.get(
