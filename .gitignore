@@ -1,0 +1,51 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Session artifacts
+data/
+*.wav
+*.mp3
+*.pcm
+*.ogg
+*.opus
+*.webm
+*.flac
+*.m4a
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Claude/Codex transcript exports are delivery artifacts, not public repo content
+transcripts/
+*transcript*.jsonl
+*transcript*.md
+claude-export*
+codex-export*
+.claude/settings.local.json
