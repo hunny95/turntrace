@@ -7,6 +7,7 @@ provider credentials are absent, per CLAUDE.md security rules.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -25,6 +26,11 @@ def check_required_env_vars() -> None:
 
 
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
+
+# Gate B: where per-session artifacts (recording.wav, session.json) land.
+# Resolved from this file's location, not the process cwd, so it is stable
+# regardless of where the server is launched from.
+SESSIONS_DIR = Path(__file__).resolve().parent.parent / "data" / "sessions"
 
 # Gate D config (read here so the single source of truth lives in one module;
 # not used until the freeze-injection processor is implemented in a later gate).
