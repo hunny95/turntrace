@@ -25,6 +25,7 @@ from pathlib import Path
 from loguru import logger
 
 from config import SESSIONS_DIR
+from path_safety import resolve_session_dir
 
 # WAV output is always 16-bit PCM (matches AudioBufferProcessor's output and
 # Pipecat's audio frames throughout this pipeline).
@@ -117,12 +118,9 @@ class Session:
 
     def _resolve_session_dir(self, session_id: str) -> Path:
         """Validate the id and build a path guaranteed to live under SESSIONS_DIR."""
-        # Raises ValueError for anything that isn't a valid UUID.
-        uuid.UUID(session_id)
-        session_dir = (self._sessions_dir / session_id).resolve()
-        if session_dir.parent != self._sessions_dir:
-            raise ValueError(f"resolved session dir {session_dir} escapes {self._sessions_dir}")
-        return session_dir
+        # Raises ValueError (InvalidSessionId) for anything that isn't a
+        # canonical UUID or that would escape the sessions root.
+        return resolve_session_dir(session_id, self._sessions_dir)
 
     # -- Clock -----------------------------------------------------------
 

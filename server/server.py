@@ -22,6 +22,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from bot import run_bot
 from config import FRONTEND_ORIGIN, check_required_env_vars
+from session_api import router as session_router
 
 # Fail fast with a names-only error if required provider credentials are missing.
 check_required_env_vars()
@@ -69,6 +70,9 @@ async def ice_update(request: SmallWebRTCPatchRequest):
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+app.include_router(session_router)
 
 
 if __name__ == "__main__":

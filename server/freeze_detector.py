@@ -38,12 +38,13 @@ import json
 import math
 import os
 import sys
-import uuid
 import wave
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+from path_safety import resolve_session_dir as _resolve_session_dir
 
 # Independent re-derivation of server/config.py's SESSIONS_DIR. Deliberately
 # NOT imported from config.py/session.py -- see module docstring.
@@ -116,16 +117,13 @@ class AnalysisError(Exception):
 
 
 def resolve_session_dir(session_id: str, sessions_dir: Path | str = _SESSIONS_DIR) -> Path:
-    """Validate session_id as a UUID and build a path guaranteed to live
-    directly under sessions_dir. Mirrors session.py's own validation so the
-    detector never opens an arbitrary filesystem path.
+    """Validate session_id as a canonical UUID and build a path guaranteed to
+    live directly under sessions_dir. Delegates to the shared
+    server/path_safety.py helper (also used by session.py and
+    session_api.py) so there is exactly one implementation of this check --
+    still framework-free, still no config/provider import.
     """
-    uuid.UUID(session_id)  # raises ValueError for anything that isn't a UUID
-    base = Path(sessions_dir).resolve()
-    session_dir = (base / session_id).resolve()
-    if session_dir.parent != base:
-        raise ValueError(f"resolved session dir escapes {base}")
-    return session_dir
+    return _resolve_session_dir(session_id, sessions_dir)
 
 
 # ---------------------------------------------------------------------------

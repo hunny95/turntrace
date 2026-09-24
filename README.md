@@ -127,6 +127,17 @@ cd server
 uv run python -m freeze_detector <session-uuid>   # add --no-write to skip saving
 ```
 
+### Reviewing a past session
+
+With the backend and frontend both running, open `http://localhost:3000/sessions`.
+The left sidebar lists saved sessions (newest first) with a short id, start
+time, duration, and a freeze-status badge. Selecting one loads
+`/sessions/<uuid>` — a persisted-only view (no new provider calls) with
+recording playback, labeled USER/BOT waveform lanes, latency and detected-
+freeze overlays on the timeline, and a timestamped, clickable transcript.
+The backend exposes this read-only data via `GET /api/sessions`,
+`GET /api/sessions/{id}`, and `GET /api/sessions/{id}/recording`.
+
 ## Status
 
 Work in progress. See `docs/STATUS.md` for the current verified implementation gate.

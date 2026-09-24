@@ -4,10 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PipecatClient, RTVIEvent } from "@pipecat-ai/client-js";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import { SessionController, type SessionState } from "@/lib/session";
+import { API_URL } from "@/lib/apiBase";
 import styles from "./page.module.css";
-
-const API_URL =
-  process.env.NEXT_PUBLIC_TURNTRACE_API_URL ?? "http://localhost:7860";
 
 export default function Home() {
   const [sessionState, setSessionState] = useState<SessionState>({

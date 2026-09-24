@@ -4,7 +4,7 @@
 Expected implementation branch: `feat/voice-session-inspector`
 
 ## Current gate
-Gates A–E complete. Next: Gate F — Next.js session review UI.
+Gates A–F complete. Next: Gate G — final review, documentation, demo and submission package.
 
 ## Gates
 - [x] A — realtime voice path works for several turns
@@ -12,10 +12,97 @@ Gates A–E complete. Next: Gate F — Next.js session review UI.
 - [x] C — per-turn user-to-bot latency captured
 - [x] D — deterministic permanent bot-audio freeze injection works
 - [x] E — independent post-call freeze detection works; trailing silence is not a freeze
-- [ ] F — Next.js review UI shows playback, transcript, latency, freeze region
+- [x] F — Next.js review UI shows playback, transcript, latency, freeze region
 - [ ] G — final tests/build/security/PR notes/demo instructions complete
 
-## Last verified result — Gate E: PASS
+## Last verified result — Gate F: PASS
+
+### Read-only session API (`server/session_api.py`, FastAPI `APIRouter`)
+- `GET /api/sessions`: summaries, newest first by `startedAt`. Only UUID-named directories with a valid `session.json` whose `id` matches are listed; everything else is skipped. Fields: `id, startedAt, durationMs, turnCount, latencyCount, hasRecording, analysisStatus (ok|missing|error), freezeDetected (bool|null), freezeStartMs`. No transcripts, no paths.
+- `GET /api/sessions/{id}`: `session.json` content, with `recording.file` removed and `latencies` defaulted to `[]` for pre-Gate-C sessions, plus `analysis` (`analysis.json` as stored, `{status:"missing"}`, or `{status:"error", error:"invalid_analysis_json"}` if unreadable). Read-only; never re-runs analysis.
+- `GET /api/sessions/{id}/recording`: fixed `recording.wav` only, `audio/wav`, via Starlette 1.7.0's built-in `FileResponse` (byte ranges supported).
+- No mutation routes (POST/PUT/PATCH/DELETE → 405) and no filename or path parameters.
+- **Path safety:** one shared helper, `server/path_safety.py` (stdlib only), used by the API, `session.py` and `freeze_detector.py`. It accepts canonical UUIDs only and requires the resolved path to stay inside the sessions root. The detector still imports neither `config` nor `freeze_gate`.
+- The router does not import `config`, `bot` or provider modules. Tests inject a temporary sessions root.
+
+### Review UI (`/sessions`, `/sessions/[id]`)
+- Shared top bar (TurnTrace · Voice Agent Session Inspector; Live / Sessions). The live call page at `/` is unchanged apart from the nav and a shared API-URL constant.
+- Sidebar: newest-first list with start time, duration and a freeze badge (detected / none / not analyzed / analysis failed).
+- Summary: duration, start time, transcript turns, measured latency count, average measured latency (from persisted values), freeze status.
+- **Playback:** the WAV is fetched once. One Blob object URL backs a single `<audio>` element, and a separate copy of the bytes is decoded with Web Audio for the waveform. Controls: play/pause, time readout, 1× / 1.5× / 2×, Space to toggle.
+- **Waveform:** USER and BOT lanes mapped from `recording.channelLayout`. Peaks come from the pure helper `computePeaks`, drawn on one shared scale with a 0.05 full-scale floor, so near-silence stays flat. Canvas is DPR-aware and redrawn on resize.
+- **Timeline:** full recording duration; click or arrow keys (±5 s) to seek (`role="slider"`); a playhead updated by `requestAnimationFrame` while playing.
+- **Latency overlay:** one span per persisted latency, from `userStopMs/durationMs` to `botStartMs/durationMs`, labelled `T{turnId} · x.xx s` from `latencyMs`. Nothing is derived from transcript timestamps.
+- **Freeze overlay:** only when `analysis.status == "ok"` and `freeze.detected`. It spans `startMs` to `endMs`, labelled "Detected bot-audio freeze", translucent so the waveform stays visible. A details block shows start, first affected turn, "persists to end of session", and evidence turn lists from `analysis.json`.
+- **Transcript:** chronological rows with `mm:ss.s`, role, `TURN n` when present, `LATENCY x.xx s` for the matching `turnId`, and "No bot audio observed" only for turns in `evidence.silentAssistantTurnIds`. Clicking a row seeks to `timestampMs − 500 ms` (clamped at 0). The row at or before the playhead is highlighted.
+- **Analysis states:** "Freeze detected", "No persistent freeze detected", "Not analyzed", "Analysis failed". Missing or error is never shown as "no freeze".
+- **Robustness:** a runtime response parser (no `any`) turns malformed data into a handled error. A failed waveform decode or missing recording leaves the metadata, overlays and transcript usable.
+- No new npm or Python dependencies; plain CSS modules, React and Web Audio.
+
+### QA defect 1 and repair: older session missing `latencies`
+- **Defect:** the real Gate B session `44fafc59…` has no `latencies` key. The detail endpoint passed that through and the strict frontend parser rejected it, so the session showed an error instead of rendering.
+- **Repair:** the detail endpoint returns `latencies: []` when the key is absent, and a regression test was added. The real session then parsed with 4 turns, no latencies, no freeze.
+
+### Human-found defect 2 and repair: playback stalled at ~00:10.8
+- **Symptom (desktop Chrome, frozen session):** audio and `currentTime` stopped at about 10.8 s while the button still showed "Pause".
+- **Root cause:** a frontend Blob URL lifetime bug in `SessionDetailView.tsx`.
+  - A separate `useEffect(() => () => revoke(objectUrlRef.current), [audioState])` ran its cleanup on every `audioState` change.
+  - The load effect set the ref to the new URL, then set `audioState` to `ready`. The cleanup left over from the `loading` render then revoked the URL the `<audio>` element had just received.
+  - `src` is assigned at commit, before passive cleanups run, so the element had already started reading and played what it had buffered, then could not continue.
+  - About 10.8 s is roughly 1 MiB of 24 kHz stereo 16-bit PCM (96,000 B/s). That is consistent with buffering evidence; Chrome's internal chunk size was not verified.
+- **Backend exonerated** against the real endpoint (orchestrator curl and independent QA):
+  - the full response is 200, `accept-ranges: bytes`, and byte-identical to the source WAV
+  - `bytes=0-1048575`, `1048576-2097151`, `15000000-15999999` and `16700000-` each return 206 with the correct `Content-Range`/`Content-Length` and bytes identical to the source
+  - an unsatisfiable range returns 416
+  - no backend recording code was changed
+- **Repair:**
+  - The recording-load effect (deps `[hasRecording, id]`) creates the URL, keeps it in a local variable, and revokes it only in its own cleanup, on recording replacement or unmount.
+  - The session view is keyed by id, so switching sessions revokes the old URL.
+  - Play state, playhead, speed, transcript highlighting and rerenders never touch it.
+- **Media state:** playback status now follows native media events through the pure helper `web/src/lib/playback.ts`:
+  - `play` → buffering until `playing`
+  - `waiting`/`stalled` while active → "Buffering…"
+  - `pause`/`ended` → stopped
+  - `error` → "Playback error"
+  - `timeupdate` keeps the time readout in sync
+- **Verification:**
+  - Independent QA in headless Chromium, against the real app:
+    - playback reached 32 s
+    - seeks to 40, 100 and 160 s resumed
+    - one object URL and one recording fetch per session view
+    - a forced media error showed "Playback error"
+  - **Headless Chromium did not reproduce the original pre-fix stall**, so the root cause rests on code inspection plus the human desktop-Chrome reproduction.
+  - A human retest in the same desktop Chrome passed.
+
+### Human validation (desktop Chrome, zero provider calls)
+- **Frozen `3d804728…`:**
+  - continuous playback went past 10.8 s, 15 s, 30 s, the freeze start (≈ 00:38.4), 1:00, 1:20 and 2:00; late seeks reached ≈ 02:28 of 02:54.4
+  - no Buffering or Playback error appeared
+  - separate USER and BOT lanes; latency spans ≈ 2.30 s and 7.90 s; freeze region from ≈ 00:38.4 to the end
+  - bot lane flat while later user activity continues
+  - assistant text after the freeze, with silent turns marked from analysis evidence
+  - 1× / 1.5× / 2×, timeline seek and transcript seek (including the late entry at ≈ 02:22.1) worked
+- **Normal and older sessions:** covered by the earlier human pass and QA; both load and play.
+- **Non-blocking polish noted:** latency labels are slightly crowded because both intervals fall early in a long session; inline transcript annotations could use a little more spacing from the sentence text; the freeze-region treatment is intentionally strong.
+
+### Automated / QA
+- Backend pytest 145/145 (97 before Gate F):
+  - 48 session-API tests: listing, ordering, malformed directories, invalid, non-canonical and traversal ids, 404s, analysis detected / negative / missing / error / malformed, no `file` or absolute paths in responses, exact recording bytes, first / second / later / open-ended byte ranges, 416, filename query ignored, mutation methods 405, older session without `latencies`
+- Frontend `node --test` 39/39: time formatting, span and freeze positioning and clamping, analysis states, older entries without `turnId`, latency lookup by `turnId`, silent indicator from evidence only, `computePeaks` (bins, silence flat, tone peaks, noise floor), summary counts and average, seek offset, active row, parser rejection of malformed payloads, media-state transitions.
+- `tsc`, ESLint, `next build` clean. `.next/static` contains no provider key names, no `data/sessions` and no local paths.
+- **Independent QA answers:**
+  - latency overlaid at its correct interval on the recording timeline: yes (T1 4.29–5.60 %, T2 10.17–14.70 %)
+  - freeze region aligned to `startMs`–`endMs` on the same timeline: yes (22.01–100 %)
+  - frozen session shows user activity with a flat bot lane: yes (bot peak exactly 0 from 39 s to the end)
+  - older pre-`turnId` session renders and isn't labelled frozen: yes (after repair 1)
+  - arbitrary local files readable through the API: no
+
+### Known limitations
+- The whole WAV is fetched into memory for playback and decoding, which is fine for local sessions of a few minutes.
+- There is no automated DOM/React test of the object-URL lifetime; it is covered by code structure, QA browser checks and the human retest.
+- Latency labels can crowd when intervals are close together on a long timeline.
+
+## Earlier verified result — Gate E: PASS
 
 ### Simulation vs detection
 - **Simulation (Gate D):** creates the condition, meaning bot output audio is dropped from a certain point onward.

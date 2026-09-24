@@ -5,7 +5,7 @@ This file is working material for the pull-request description. Keep it factual 
 ## Summary
 TurnTrace adds a realtime voice-agent session inspection workflow using Pipecat, with stored recordings/transcripts, user-to-bot latency visualization, deterministic silent-output failure injection, and independent post-call freeze detection.
 
-**Current state:** Gate A (realtime voice path), Gate B (session recording + transcript persistence), Gate C (per-turn user-to-bot latency), Gate D (deterministic bot-audio freeze simulation) and Gate E (independent post-call freeze detection) are implemented and verified. The review UI is pending.
+**Current state:** Gate A (realtime voice path), Gate B (session recording + transcript persistence), Gate C (per-turn user-to-bot latency), Gate D (deterministic bot-audio freeze simulation) Gate E (independent post-call freeze detection) and Gate F (session review UI) are implemented and verified.
 
 ## Implementation approach
 ### Gate A — realtime voice path (done)
@@ -86,7 +86,7 @@ Provider credentials are read only by the backend. CORS is restricted to the con
 
 ## Freeze simulation (Gate D, done)
 **Simulation:** the backend deterministically and permanently drops bot output audio after the configured number of user-triggered assistant responses.
-**Detection:** not implemented yet. Gate E will independently detect a freeze from ordinary persisted session evidence.
+**Detection:** Gate E independently detects a freeze from ordinary persisted session evidence (see below).
 
 - **Placement:** a backend-only `FreezeGate` (`server/freeze_gate.py`) sits after Cartesia TTS and before `transport.output()`. Dropped audio therefore never reaches the browser, never triggers `BotStartedSpeakingFrame`, never reaches the recorder, and never produces a latency.
 - **Config:** `FREEZE_AFTER_ASSISTANT_TURNS=2` by default; `0` disables the simulator; invalid values fail config validation.
@@ -135,6 +135,29 @@ Provider credentials are read only by the backend. CORS is restricted to the con
   - `data/sessions/<uuid>/analysis.json` is detector-derived, local and git-ignored, and kept separate from raw `session.json`.
   - It is written atomically after finalization, off the event loop, and is deterministic, so it can be rerun (`uv run python -m freeze_detector <uuid>`).
   - A detector failure writes `status: "error"` with no `freeze` block, so it cannot be confused with a valid negative.
+
+## Session review UI (Gate F, done)
+- **Read-only API** (`server/session_api.py`):
+  - `GET /api/sessions` returns summaries, newest first.
+  - `GET /api/sessions/{id}` returns session data plus the analysis result or an explicit `missing`/`error` state.
+  - `GET /api/sessions/{id}/recording` serves the fixed `recording.wav` through Starlette's `FileResponse`, with byte ranges.
+  - Ids must be canonical UUIDs, resolved through one shared path helper (`server/path_safety.py`, also used by the recorder and detector).
+  - No filesystem paths are returned, and there are no mutation routes or filename parameters.
+  - Analysis is never re-run by a read.
+- **Pages:** `/sessions` and `/sessions/[id]`, next to the unchanged live call page at `/`, under a shared Live / Sessions nav.
+- **Recording and waveform:**
+  - The WAV is fetched once. One Blob URL feeds a single `<audio>` element, and a copy of the bytes is decoded with Web Audio.
+  - USER and BOT waveform lanes are mapped from `channelLayout`, with a shared amplitude scale and a noise floor so silent or frozen sections stay flat.
+- **Timeline overlays**, all on one recording-aligned timeline with a seekable slider and a moving playhead:
+  - Latency spans from persisted `userStopMs` to `botStartMs`, labelled with `latencyMs`.
+  - The detected freeze region from `analysis.startMs` to `endMs` (session end), translucent over both lanes, with an evidence summary (earlier audible, silent and continuation turns).
+- **Transcript:**
+  - Chronological, with timestamps, role, turn id and matched latency.
+  - "No bot audio observed" appears only for turns the detector listed as silent.
+  - Clicking a row seeks to 0.5 s before it, and the current row is highlighted.
+- **Analysis states:** "Freeze detected", "No persistent freeze detected", "Not analyzed", "Analysis failed". Missing or failed analysis is never shown as a negative.
+- **Older sessions:** entries without `turnId` render without turn labels, and a missing `latencies` key is served as `[]`.
+- No new dependencies: React, CSS modules, Canvas and Web Audio only.
 
 ## Latency
 User-to-bot latency is measured from actual user speech end to first emitted bot audio. See Gate C above.
@@ -194,6 +217,9 @@ Gate B:
 - **Transport state vs provider-turn errors:** a provider failure is not a connection failure. Conflating them previously produced a UI that claimed disconnection while the mic stayed live.
 - **One teardown path:** every way of leaving a session goes through the same disconnect/mic-stop/audio-detach code, so "Connect" is only offered when no session is live.
 - **Failed-turn context cleanup:** dropping the unanswered user message prevents a failed question from being answered unexpectedly on a later turn. It is scoped to the messages the failed request saw, so newer speech is preserved.
+- **Client-side waveform from the WAV instead of server-computed peaks:** the recording is already needed in the browser for playback, and decoding it once avoids a second derived artifact and endpoint. The waveform is visual evidence only; detection remains the backend's job.
+- **Blob URL over streaming from the endpoint:** one fetch serves both playback and decoding, which is simple for local sessions of a few minutes. The endpoint still supports byte ranges if direct streaming is ever needed.
+- **Status from native media events:** the play/pause/buffering/error display follows the `<audio>` element's own events rather than button clicks, so a stall cannot masquerade as playback.
 - **Latency tuning deferred:** model choice, VAD, and Smart Turn parameters are unchanged until latency is measured per turn (Gate C).
 
 ## Known limitations
@@ -209,6 +235,7 @@ Gate B:
 - A failed connect attempt displays the browser/client error message verbatim (not provider text).
 - Freeze counting: if the user starts speaking while the previous response's audio is still finishing, the association between the next response and its user turn (and therefore the freeze count) can be ambiguous. Once frozen, no later bot audio can leak regardless. The scripted test avoids overlap by waiting between turns.
 - Gemini latency varies widely; free-tier quota can produce 429s during long sessions.
+- Review UI: the whole WAV is fetched into browser memory, which is fine for local sessions of a few minutes. Latency labels can crowd when intervals are close together on a long timeline. There is no automated DOM test of the Blob URL lifetime; it is covered by code structure, QA browser checks and a human retest.
 - Freeze detection: the RMS threshold is tuned to this pipeline. The bot channel is TTS output plus digital idle silence, and the threshold is at most 1000 RMS. A quieter voice or gain change could require re-tuning. Response windows rely on transcript timestamps, so heavy barge-in overlap could attribute audio to a neighbouring window. A final silent response followed immediately by hang-up is intentionally not reported.
 
 Gate C:
@@ -269,6 +296,19 @@ Gate E:
   - Gate D session `3d804728…`: detected. `startTurnId` 3, `startMs` 38397, `endMs` 174418. Audible before: [1, 2]; silent: [3, 4, 6]; continuation: [4, 5, 6].
   - Gate C normal session `085a9d47…`: not detected.
   - Gate B session with a 503 and recovery `44fafc59…`: not detected. The failed user turn had no assistant text, so it cannot start a freeze region.
+
+Gate F:
+- **Automated:**
+  - backend pytest 145/145, including 48 session-API tests: path safety, analysis states, no path leakage, exact recording bytes and byte ranges including 416, no mutation routes, and an older session without `latencies`
+  - frontend `node --test` 39/39: timeline and overlay math, analysis states, older transcripts, the silent indicator from evidence only, waveform peaks, summary figures, seek and active-row helpers, response parsing, media-state transitions
+  - `tsc`, ESLint and `next build` clean; no provider key names or data paths in the client bundle
+- **Independent QA:** found that the real older session had no `latencies` key and failed to render. The API now defaults it to `[]`, with a regression test.
+- **Human validation (desktop Chrome) found a playback stall at about 10.8 s.**
+  - **Cause:** an effect keyed on the audio load state revoked the recording's Blob URL immediately after it was given to the `<audio>` element. The element played what it had buffered, then could not continue. About 10.8 s is roughly 1 MiB of the recording's PCM, which is consistent with buffering; Chrome's internal chunk size was not verified.
+  - **Backend ruled out:** the recording endpoint was verified healthy, with the full response and first, second, later and end byte ranges identical to the source and 416 for an unsatisfiable range.
+  - **Fix:** the Blob URL is now owned by the recording-load effect and revoked only when the recording is replaced or the view unmounts. Playback status is derived from native media events, so a stall shows "Buffering…" rather than a stuck "Pause".
+  - **Verification:** independent QA checked the fixed behavior in headless Chromium. It did not reproduce the original stall. A human retest in the same desktop Chrome then played the frozen session well past 2:00, with seeks, speed changes and transcript seeks all working.
+- **Real sessions:** the frozen session shows latency spans of about 2.30 s and 7.90 s, and a freeze region from about 00:38.4 to the end, where the bot lane is flat while user audio continues. The normal and older sessions show "No persistent freeze detected" with no region.
 
 ## Future improvements
 _To be updated after final review._

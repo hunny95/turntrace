@@ -10,6 +10,25 @@
   }
 }
 
+/* TurnTrace review UI design tokens: dark, restrained observability
+ * palette. Fixed (not theme-switched) so the session review surface reads
+ * consistently regardless of OS theme -- it is a dense data tool, not
+ * marketing content. */
+:root {
+  --tt-bg: #0b0d10;
+  --tt-bg-raised: #12151a;
+  --tt-bg-hover: #1a1f26;
+  --tt-border: #262b33;
+  --tt-fg: #e6e9ef;
+  --tt-fg-muted: #8b93a1;
+  --tt-fg-dim: #5b6270;
+  --tt-accent-user: #5aa9e6;
+  --tt-accent-bot: #55c79a;
+  --tt-accent-latency: #d8a637;
+  --tt-accent-freeze: #e0555a;
+  --tt-focus: #7cb8ff;
+}
+
 html {
   height: 100%;
 }
