@@ -92,6 +92,32 @@ turntrace/
 └── README.md
 ```
 
+## Local development
+
+Backend (Python 3.12, managed by `uv`):
+
+```bash
+cd server
+uv sync
+uv run python server.py --port 7860
+```
+
+Requires `server/.env` (copy from `.env.example`) with `DEEPGRAM_API_KEY`,
+`GOOGLE_API_KEY`, and `CARTESIA_API_KEY` set. The server fails fast with a
+names-only error if any are missing.
+
+Frontend (Next.js + TypeScript):
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`, click **Connect**, and allow microphone access.
+The frontend talks to the backend at `http://localhost:7860` by default
+(override with `NEXT_PUBLIC_TURNTRACE_API_URL` in `web/.env.local`).
+
 ## Status
 
 Work in progress. See `docs/STATUS.md` for the current verified implementation gate.
