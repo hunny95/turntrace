@@ -1,0 +1,38 @@
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1.25rem;
+  border-bottom: 1px solid var(--tt-border);
+  background: var(--tt-bg-raised);
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.85rem;
+}
+
+.brand {
+  color: var(--tt-fg);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.subtitle {
+  color: var(--tt-fg-muted);
+  font-weight: 400;
+}
+
+.nav {
+  display: flex;
+  gap: 1rem;
+}
+
+.link {
+  color: var(--tt-fg-muted);
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+}
+
+.link:hover,
+.link:focus-visible {
+  color: var(--tt-fg);
+  background: var(--tt-bg-hover);
+}

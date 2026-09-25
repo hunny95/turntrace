@@ -1,0 +1,68 @@
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+/* TurnTrace review UI design tokens: dark, restrained observability
+ * palette. Fixed (not theme-switched) so the session review surface reads
+ * consistently regardless of OS theme -- it is a dense data tool, not
+ * marketing content. */
+:root {
+  --tt-bg: #0b0d10;
+  --tt-bg-raised: #12151a;
+  --tt-bg-hover: #1a1f26;
+  --tt-border: #262b33;
+  --tt-fg: #e6e9ef;
+  --tt-fg-muted: #8b93a1;
+  --tt-fg-dim: #5b6270;
+  --tt-accent-user: #5aa9e6;
+  --tt-accent-bot: #55c79a;
+  --tt-accent-latency: #d8a637;
+  --tt-accent-freeze: #e0555a;
+  --tt-focus: #7cb8ff;
+}
+
+html {
+  height: 100%;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    color-scheme: dark;
+  }
+}

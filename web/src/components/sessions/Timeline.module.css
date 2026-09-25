@@ -1,0 +1,103 @@
+.timeline {
+  position: relative;
+  border: 1px solid var(--tt-border);
+  border-radius: 4px;
+  padding: 0.5rem 0;
+  outline: none;
+}
+
+.timeline:focus-visible {
+  box-shadow: 0 0 0 2px var(--tt-focus);
+}
+
+.lane {
+  position: relative;
+  height: 56px;
+  margin: 0 0.5rem;
+}
+
+.laneLabel {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: var(--tt-fg-dim);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.laneUnavailable {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tt-fg-dim);
+  font-size: 0.72rem;
+  font-family: var(--font-geist-mono, monospace);
+}
+
+.overlayLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.latencySpan {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(216, 166, 55, 0.16);
+  border-left: 1px solid var(--tt-accent-latency);
+  border-right: 1px solid var(--tt-accent-latency);
+}
+
+.latencyLabel {
+  position: absolute;
+  top: -1.1rem;
+  left: 2px;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.62rem;
+  color: var(--tt-accent-latency);
+  white-space: nowrap;
+}
+
+.freezeRegion {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(224, 85, 90, 0.22),
+    rgba(224, 85, 90, 0.22) 6px,
+    rgba(224, 85, 90, 0.1) 6px,
+    rgba(224, 85, 90, 0.1) 12px
+  );
+  border-left: 1px solid var(--tt-accent-freeze);
+}
+
+.freezeLabel {
+  position: absolute;
+  bottom: -1.1rem;
+  left: 2px;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.62rem;
+  color: var(--tt-accent-freeze);
+  white-space: nowrap;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--tt-fg);
+  z-index: 4;
+}
+
+.ruler {
+  height: 1.2rem;
+  margin: 0.2rem 0.5rem 0.7rem;
+}

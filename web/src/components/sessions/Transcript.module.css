@@ -1,0 +1,89 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--tt-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 4.5rem 5.5rem 1fr;
+  gap: 0.6rem;
+  align-items: start;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.7rem;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--tt-border);
+  color: var(--tt-fg);
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:hover,
+.row:focus-visible {
+  background: var(--tt-bg-hover);
+}
+
+.rowActive {
+  background: rgba(124, 184, 255, 0.1);
+  border-left: 2px solid var(--tt-focus);
+}
+
+.timestamp {
+  font-family: var(--font-geist-mono, monospace);
+  color: var(--tt-fg-dim);
+}
+
+.roleCol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.68rem;
+}
+
+.roleUser {
+  color: var(--tt-accent-user);
+}
+
+.roleAssistant {
+  color: var(--tt-accent-bot);
+}
+
+.turnTag {
+  color: var(--tt-fg-dim);
+}
+
+.text {
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.latencyTag {
+  display: inline-block;
+  margin-top: 0.25rem;
+  color: var(--tt-accent-latency);
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.68rem;
+}
+
+.silentTag {
+  display: inline-block;
+  margin-top: 0.25rem;
+  color: var(--tt-accent-freeze);
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.68rem;
+}
+
+.empty {
+  padding: 1rem;
+  color: var(--tt-fg-muted);
+  font-size: 0.85rem;
+}
