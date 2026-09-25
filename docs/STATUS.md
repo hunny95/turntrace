@@ -4,7 +4,7 @@
 Expected implementation branch: `feat/voice-session-inspector`
 
 ## Current gate
-Gates A–F complete. Next: Gate G — final review, documentation, demo and submission package.
+Gates A–G complete. PR #1 is ready for review (not merged).
 
 ## Gates
 - [x] A — realtime voice path works for several turns
@@ -13,9 +13,42 @@ Gates A–F complete. Next: Gate G — final review, documentation, demo and sub
 - [x] D — deterministic permanent bot-audio freeze injection works
 - [x] E — independent post-call freeze detection works; trailing silence is not a freeze
 - [x] F — Next.js review UI shows playback, transcript, latency, freeze region
-- [ ] G — final tests/build/security/PR notes/demo instructions complete
+- [x] G — final tests/build/security/PR notes/demo instructions complete
 
-## Last verified result — Gate F: PASS
+## Last verified result — Gate G: PASS
+
+- **Final read-only review** (principal/security/realtime) found no code blockers. The only blocker was the stale PR body, resolved by this update. Follow-ups applied:
+  - `path_safety.py` now requires the exact canonical lowercase UUID. An uppercase id used to be accepted: it served the recording on case-insensitive disks and returned a 500 on the detail route. Regression tests were added.
+  - The `bot.py` comment on turn-id ordering now states the real margin, which is asyncio scheduling across processor queue hops, not Gemini TTFB. `GoogleLLMService` pushes `LLMFullResponseStartFrame` before the request (verified in the installed source).
+  - README and PR notes: Node 22.18+, runnable command blocks, correct echo-cancellation attribution and defect attribution, and added limitations (freeze region start, localhost-only API, DEBUG logs contain conversation text).
+- **Requirement audit:** every requirement passes against the code, tests and real sessions.
+- **Automated checks:**
+  - backend pytest 147/147
+  - frontend `node --test` 39/39
+  - `tsc --noEmit`, ESLint and `next build` clean
+  - `git diff --check` clean
+  - no provider calls
+- **Local smoke** (no new voice session), in headless Chrome against the local servers:
+  - `/`, `/sessions` and all three stored sessions load.
+  - Frozen session:
+    - Playback ran from 9.5 s through 19.4 s, past the old 10.8 s stall. A seek to 130 s kept playing.
+    - Both waveform lanes painted.
+    - Two latency spans, the freeze region from 00:38.4 to the end, freeze details, and the transcript with "No bot audio observed" on T3, T4 and T6.
+  - Normal session: 2 latencies, no freeze region.
+  - Older provider-failure session: loads, with no latencies and no freeze.
+  - Page errors: none.
+- **Hygiene:**
+  - No tracked `.env`, recordings, session or analysis JSON, `data/`, dependency or build directories, or transcript exports, and none in history.
+  - No secret patterns in tracked files or history.
+  - No absolute local paths in tracked files.
+  - The public-term check is clean.
+- **Deferred non-blocking items:**
+  - CORS `allow_credentials=True` is unused.
+  - No Host-header check (localhost tool).
+  - `pyproject.toml` placeholder description.
+  - Unused create-next-app SVGs in `web/public`.
+
+## Earlier verified result — Gate F: PASS
 
 ### Read-only session API (`server/session_api.py`, FastAPI `APIRouter`)
 - `GET /api/sessions`: summaries, newest first by `startedAt`. Only UUID-named directories with a valid `session.json` whose `id` matches are listed; everything else is skipped. Fields: `id, startedAt, durationMs, turnCount, latencyCount, hasRecording, analysisStatus (ok|missing|error), freezeDetected (bool|null), freezeStartMs`. No transcripts, no paths.
