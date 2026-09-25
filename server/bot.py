@@ -293,13 +293,17 @@ async def run_bot(webrtc_connection) -> None:
         # request" is FALSE -- the LLM request is enqueued first. In
         # practice this is still safe: our on_user_turn_stopped task is
         # scheduled via call_soon and runs within microseconds (it does no
-        # I/O), while LLMFullResponseStartFrame can only appear after a real
-        # network round trip to Gemini (observed >=0.5s TTFB in this
-        # codebase's Gate A testing -- .claude/tasks/001.../STATUS.md). So
-        # tracker.on_user_turn_finalized() always completes, allocating the
-        # turn id, before this handler could plausibly fire for that same
-        # turn. This is a comfortable timing margin, not a framework-
-        # enforced invariant -- documented here as a residual assumption.
+        # I/O). Note GoogleLLMService pushes LLMFullResponseStartFrame at the
+        # start of _process_context, *before* the network request, so the
+        # margin is not Gemini TTFB: it is asyncio FIFO scheduling -- the
+        # context frame and then the start frame must cross several
+        # processor queue hops (context_cleanup -> llm -> tts -> freeze_gate
+        # -> output -> ... -> assistant aggregator) before this handler can
+        # fire, while the already-scheduled user handler runs first. So
+        # tracker.on_user_turn_finalized() completes, allocating the turn id,
+        # before this handler fires for that same turn. This is a scheduling
+        # margin, not a framework-enforced invariant -- documented here as a
+        # residual assumption (FreezeGate's pending_turn_id relies on it too).
         tracker.on_assistant_turn_started()
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")

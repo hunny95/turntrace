@@ -29,8 +29,8 @@ def resolve_session_dir(session_id: str, sessions_dir: Path | str) -> Path:
 
     Only canonical ``uuid.UUID(x)`` round-trips are accepted: non-canonical
     forms (braces, urn prefix, uppercase-without-hyphens, etc.) are
-    rejected, i.e. ``str(uuid.UUID(session_id)) == session_id.lower()``
-    must hold. The resolved path must be a direct child of the resolved
+    rejected, as are uppercase forms, i.e.
+    ``str(uuid.UUID(session_id)) == session_id`` must hold exactly. The resolved path must be a direct child of the resolved
     sessions_dir -- this also rejects traversal strings.
     """
     try:
@@ -38,7 +38,7 @@ def resolve_session_dir(session_id: str, sessions_dir: Path | str) -> Path:
     except (ValueError, AttributeError, TypeError) as exc:
         raise InvalidSessionId("invalid session id") from exc
 
-    if str(parsed) != session_id.lower():
+    if str(parsed) != session_id:
         raise InvalidSessionId("non-canonical session id")
 
     base = Path(sessions_dir).resolve()

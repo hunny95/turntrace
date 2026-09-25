@@ -315,6 +315,7 @@ def test_detail_invalid_uuid_rejected(tmp_path):
         "{11111111-1111-1111-1111-111111111111}",  # braces
         "urn:uuid:11111111-1111-1111-1111-111111111111",  # urn prefix
         "11111111111111111111111111111111",  # uppercase-without-hyphens form (32 hex, no dashes but lower ok normally)
+        "AAAAAAAA-1111-1111-1111-111111111111",  # uppercase hyphenated form
     ],
 )
 def test_detail_non_canonical_uuid_rejected(tmp_path, malformed):
@@ -492,3 +493,15 @@ def test_server_py_includes_session_router():
     text = server_src.read_text()
     assert "session_api" in text
     assert "include_router" in text
+
+
+def test_uppercase_uuid_cannot_reach_existing_session(tmp_path):
+    session_id = "aaaaaaaa-1111-4111-8111-111111111111"
+    session_dir = tmp_path / session_id
+    session_dir.mkdir()
+    (session_dir / "session.json").write_text(json.dumps({"id": session_id}))
+    (session_dir / "recording.wav").write_bytes(b"RIFF")
+    client = make_app(tmp_path)
+    upper = session_id.upper()
+    assert client.get(f"/api/sessions/{upper}").status_code == 400
+    assert client.get(f"/api/sessions/{upper}/recording").status_code == 400
