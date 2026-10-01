@@ -1,0 +1,124 @@
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.id {
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 1rem;
+  color: var(--tt-fg);
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.4rem;
+  margin-bottom: 1rem;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.78rem;
+  color: var(--tt-fg-muted);
+}
+
+.summary strong {
+  color: var(--tt-fg);
+  font-weight: 500;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.8rem;
+}
+
+.playButton {
+  background: var(--tt-bg-raised);
+  border: 1px solid var(--tt-border);
+  color: var(--tt-fg);
+  padding: 0.35rem 0.8rem;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.playButton:hover {
+  background: var(--tt-bg-hover);
+}
+
+.timeReadout {
+  color: var(--tt-fg-muted);
+}
+
+.speedGroup {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.speedButton {
+  background: none;
+  border: 1px solid var(--tt-border);
+  color: var(--tt-fg-muted);
+  padding: 0.2rem 0.5rem;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.speedButtonActive {
+  color: var(--tt-fg);
+  border-color: var(--tt-focus);
+}
+
+.section {
+  margin: 1.25rem 0 0.5rem;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--tt-fg-dim);
+}
+
+.freezeDetails {
+  border: 1px solid var(--tt-border);
+  border-radius: 4px;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.freezeDetails dt {
+  color: var(--tt-fg-muted);
+  display: inline;
+}
+
+.freezeDetails dd {
+  display: inline;
+  margin: 0 0 0 0.35rem;
+  color: var(--tt-fg);
+}
+
+.freezeRow {
+  display: block;
+}
+
+.notAnalyzed {
+  color: var(--tt-fg-muted);
+  font-size: 0.85rem;
+}
+
+.analysisFailed {
+  color: var(--tt-accent-freeze);
+  font-size: 0.85rem;
+}
+
+.noticeText {
+  color: var(--tt-fg-muted);
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+}

@@ -1,0 +1,111 @@
+.shell {
+  display: flex;
+  min-height: calc(100vh - 48px);
+  background: var(--tt-bg);
+  color: var(--tt-fg);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--tt-border);
+  overflow-y: auto;
+  padding: 0.5rem 0;
+}
+
+.sidebarHeader {
+  padding: 0.5rem 1rem;
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--tt-fg-dim);
+}
+
+.sidebarEmpty {
+  padding: 1rem;
+  color: var(--tt-fg-muted);
+  font-size: 0.85rem;
+}
+
+.sessionItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.6rem 1rem;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--tt-fg);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: var(--font-geist-mono, monospace);
+}
+
+.sessionItem:hover,
+.sessionItem:focus-visible {
+  background: var(--tt-bg-hover);
+}
+
+.sessionItemActive {
+  border-left-color: var(--tt-focus);
+  background: var(--tt-bg-hover);
+}
+
+.sessionId {
+  color: var(--tt-fg);
+}
+
+.sessionMeta {
+  color: var(--tt-fg-muted);
+  font-size: 0.75rem;
+  margin-top: 0.15rem;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  margin-top: 0.3rem;
+  font-family: var(--font-geist-mono, monospace);
+}
+
+.badgeDetected {
+  background: rgba(224, 85, 90, 0.18);
+  color: var(--tt-accent-freeze);
+}
+
+.badgeNegative {
+  color: var(--tt-fg-dim);
+}
+
+.badgeMissing,
+.badgeError {
+  color: var(--tt-fg-dim);
+}
+
+.detail {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem;
+}
+
+.emptyPrompt {
+  color: var(--tt-fg-muted);
+  padding: 2rem;
+  font-size: 0.9rem;
+}
+
+.stateText {
+  color: var(--tt-fg-muted);
+  padding: 1rem;
+  font-size: 0.85rem;
+}
+
+.errorText {
+  color: var(--tt-accent-freeze);
+  padding: 1rem;
+  font-size: 0.85rem;
+}
